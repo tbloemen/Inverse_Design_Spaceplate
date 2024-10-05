@@ -10,13 +10,14 @@ TMM formalism and notation from Ch 4.9 of this textbook:
 Yariv, A. & Yeh, P. Photonics: Optical electronics in modern communications (Oxford University Press, 2007).
 """
 
+import numpy as np
+
+from TMM_subroutines import TMM, import_structure
+from plot_results import plot_sweep_results
+from spaceplate import plot_spaceplate_phase, fit_spaceplate, plot_structure, plot_structure2
+
 
 def main():
-    import numpy as np
-    from TMM_subroutines import TMM, import_structure
-    from plot_results import plot_sweep_results
-    from spaceplate import plot_spaceplate_phase, fit_spaceplate, plot_structure, plot_structure2
-
     # Set up toggles
     enable_plots = True
     save_data = True

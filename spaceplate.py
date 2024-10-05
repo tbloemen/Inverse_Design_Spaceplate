@@ -4,7 +4,11 @@
 Functions related to spaceplates
 """
 
+import lmfit
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Rectangle
 
 pi = np.pi
 
@@ -47,8 +51,6 @@ def fit_spaceplate(angles, t, wavelengths, max_fit_angle, global_offset=False):
     If globaleoffset is true, it fits to the following equation instead:
         phi = -phi_global + k * d_eff * np.cos(angle)
     Returns the fitted phi(angle), the fit object, and the RMSE."""
-
-    import lmfit
 
     # Calculate the phase, and prepare the data to be fitted
     phase = np.unwrap(np.angle(t)).ravel()
@@ -113,9 +115,6 @@ def fit_spaceplate(angles, t, wavelengths, max_fit_angle, global_offset=False):
 
 
 def plot_spaceplate_phase(angles, t, phase_fit, max_fit_angle):
-    import matplotlib
-    import matplotlib.pyplot as plt
-
     matplotlib.rc('font', size=12)
     matplotlib.rc('text', usetex=False)
 
@@ -143,10 +142,6 @@ def plot_spaceplate_phase(angles, t, phase_fit, max_fit_angle):
 
 
 def plot_spaceplate_phase_2devices(angles, t, t2, phase_fit, phase_fit2, max_fit_angle):
-    import matplotlib
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
-
     matplotlib.rc('font', size=20)
     # matplotlib.rc('text', usetex=True)
 
@@ -194,8 +189,6 @@ def plot_structure(thicknesses):
     The positioning of the scale bar is approximate, it may need adjusting
     according to the size of the device.
     """
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
 
     fig, ax = plt.subplots(1, figsize=(8.5, 8.5))
 
@@ -244,8 +237,6 @@ def plot_structure2(thicknesses, indices):
     not have a perfectly white layer).
     ie, black = max(index)/max(index) * 245 + 10 = 255
     """
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
 
     grayscale = [1 - (i.real / (round(max(indices.real)))) for i in indices]
     # Use next line to decrease visual range between highest and lowest index

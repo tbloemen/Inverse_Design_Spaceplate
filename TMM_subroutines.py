@@ -1,5 +1,7 @@
-from numba import njit
 import numpy as np
+import mat73
+
+from numba import njit
 
 # numba jit test results:
 # 75 layers, 2 materials, no dispersion
@@ -234,19 +236,18 @@ def import_from_csv(filename):
 
 
 def import_from_mat(filename):
-    import mat73
     data_dict = mat73.loadmat(filename)
-    thicknesses = data_dict['layers'] # units: m
-    thicknesses = thicknesses*1e6 # units: um
-    thicknesses = thicknesses[1:-1] # Lumerical included first and last layers of thickness 0. Python doesn't use these
+    thicknesses = data_dict['layers']  # units: m
+    thicknesses = thicknesses * 1e6  # units: um
+    thicknesses = thicknesses[1:-1]  # Lumerical included first and last layers of thickness 0. Python doesn't use these
     indices = data_dict['n2']
-    indices = indices[1:-1] # Lumerical included first and last layers of index 1. Python doesn't use these
+    indices = indices[1:-1]  # Lumerical included first and last layers of index 1. Python doesn't use these
     return thicknesses, indices
 
 
 def import_from_npz(filename):
     GD_data = np.load(filename)
-    thicknesses = GD_data['thickness_list']*1e6
+    thicknesses = GD_data['thickness_list'] * 1e6
     indices_wBG = GD_data['index_list_wBG']
     indices = indices_wBG[1:-1]
     return thicknesses, indices
@@ -263,5 +264,6 @@ def import_structure(filename):
     elif filename.endswith('.csv'):
         thicknesses, indices = import_from_csv(filename)
     else:
-        raise Exception("The filetype you entered is not recognized. Only the following filetypes are supported: *.mat  *.csv  *.npz")
+        raise Exception(
+            "The filetype you entered is not recognized. Only the following filetypes are supported: *.mat  *.csv  *.npz")
     return thicknesses, indices

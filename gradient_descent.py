@@ -49,14 +49,17 @@ When a peak is reached, one of two things can happen:
 """
 #######################################################################
 
-import numpy as np
-from TMM_subroutines import TMM, import_structure
-from spaceplate import fit_spaceplate_toR, fit_spaceplate, plot_spaceplate_phase, plot_structure
-from plot_results import plot_sweep_results
-from functools import partial
+import concurrent.futures
+import os
 from copy import deepcopy  # for copying 2D lists
 from time import time
-import concurrent.futures
+
+import numpy as np
+from numpy import ndarray, dtype, signedinteger
+
+from Inverse_Design_Spaceplate.TMM_subroutines import TMM
+from Inverse_Design_Spaceplate.plot_results import plot_sweep_results
+from Inverse_Design_Spaceplate.spaceplate import fit_spaceplate_toR, fit_spaceplate, plot_spaceplate_phase, plot_structure
 
 
 def main():
@@ -64,14 +67,15 @@ def main():
     # Initialize multi-processing variables:
     num_computer_cores = 2
     num_points_in_swarm = 100  # Note: pick a number divisible by num_computer_cores
+    assert 100 % 2 == 0
     points_per_core = round(num_points_in_swarm / num_computer_cores)
 
     # Initialize device variables
     num_layers = 13
-    n_BG_in = 1  # index of background medium
-    n_BG_out = 1  # index of substrate
     n_low = 1.444  # SiO2 at 1550 nm
     n_high = 3.47638  # Si at 1550 nm
+    n_BG_in = 1  # index of background medium
+    n_BG_out = 1  # index of substrate
     index_list_wBG = create_index_list(num_layers, n_low, n_high, n_BG_in, n_BG_out)  # includes background on both ends
 
     # Initialize simulation variables
@@ -104,20 +108,30 @@ def main():
 
     filename = f'spaceplate_{num_layers}layers_targetR{target_R}_theta{max_angle}'
 
-    swarms = {}
-    optimize_layers = {}
+    swarms = []
+    optimize_layers = []
 
     for i in range(num_computer_cores):
-        swarms[i] = createSwarm(points_per_core, num_layers, min_layer_thickness, max_layer_thickness)
-        optimize_layers[i] = np.ones(num_points_in_swarm, dtype=int) * default_start
+        swarms.append(createSwarm(points_per_core, num_layers, min_layer_thickness, max_layer_thickness))
+        optimize_layers.append(np.ones(num_points_in_swarm, dtype=int) * default_start)
 
-    dt = np.dtype([('wavelength', 'f4'), ('theta', (object, len(theta))), ('index_list_wBG', (object, num_layers + 2)),
-                   ('num_layers', 'i4'), ('points_per_core', 'i4'), ('default_start', 'i4'),
+    dt = np.dtype([('wavelength', 'f4'),
+                   ('theta', (object, len(theta))),
+                   ('index_list_wBG', (object, num_layers + 2)),
+                   ('num_layers', 'i4'),
+                   ('points_per_core', 'i4'),
+                   ('default_start', 'i4'),
                    ('optimize_layers_increase', 'i4'),
-                   ('step1', 'f4'), ('step2', 'f4'), ('saving_threshold', 'f4'), ('stage_2_threshold', 'f4'),
+                   ('step1', 'f4'),
+                   ('step2', 'f4'),
+                   ('saving_threshold', 'f4'),
+                   ('stage_2_threshold', 'f4'),
                    ('filename', 'U' + str(len(filename))),
-                   ('polarization', 'U1'), ('min_layer_thickness', 'i4'), ('max_layer_thickness', 'i4'),
-                   ('target_R', 'f4'), ('derivative_step', 'f4')])
+                   ('polarization', 'U1'),
+                   ('min_layer_thickness', 'i4'),
+                   ('max_layer_thickness', 'i4'),
+                   ('target_R', 'f4'),
+                   ('derivative_step', 'f4')])
     variables = np.array(
         (wavelength, [theta], [index_list_wBG], num_layers, points_per_core, default_start, optimize_layers_increase,
          step1, step2, saving_threshold, stage_2_threshold, filename, polarization, min_layer_thickness,
@@ -127,7 +141,7 @@ def main():
         stage1(swarms[0], optimize_layers[0], variables, 0)
     else:
         with concurrent.futures.ProcessPoolExecutor() as executor:
-            results = [executor.submit(stage1, swarms[d], optimize_layers[d], variables, d) for d in swarms]
+            results = [executor.submit(stage1, swarms[d], optimize_layers[d], variables, d) for d in range(len(swarms))]
 
         for f in concurrent.futures.as_completed(results):
             f.result()
@@ -135,13 +149,16 @@ def main():
     print('Total runtime:', round(time() - Main_start_time, 2))
 
 
-def create_index_list(N_layers, n_low, n_high, n_BG_in, n_BG_out):
+def create_index_list(N_layers: int, n_low: float, n_high: float, n_BG_in: int, n_BG_out: int) -> ndarray:
     """Function that specifies what each layers of the structure will be made of.
     N_layers: number of layers the devices in the swarm will have
     n_BG_in: index of the background medium on input side
-    n_BG_out: index of the background medium on substrate side"""
+    n_BG_out: index of the background medium on substrate side
 
-    index_list_wBG = np.ones((N_layers + 2, 1))
+    Returns numpy list of shape (N_layers+2,) with idx 0 being n_BG_in, idx N_layers+2 being n_BG_out,
+    and alternating n_low and n_high in between."""
+
+    index_list_wBG = np.ones((N_layers + 2,))
     index_list_wBG[0] = n_BG_in
 
     for i in range(1, N_layers + 1):
@@ -155,18 +172,139 @@ def create_index_list(N_layers, n_low, n_high, n_BG_in, n_BG_out):
     return index_list_wBG
 
 
-def create_thickness_list(num_layers, lowerbound, upperbound):
+def createSwarm(swarm_size: int, num_layers: int, lowerbound: int, upperbound: int) -> list[ndarray[float]]:
+    """Creates a list of size swarm_size of randomly generated 'thickness_list's"""
+    return [create_thickness_list(num_layers, lowerbound, upperbound) for _ in range(swarm_size)]
+
+
+def create_thickness_list(num_layers: int, lowerbound: int, upperbound: int) -> ndarray[float]:
     """createPoint(): creates a random starting point for the swarm.
     IOW, creates a structure with N layers of random thickness
     between lowerbound and upperbound
 
     num_layers: number of layers
     lowerbound: thinnest value a layer can have (in nm)
-    upperbound: thickest value a layer can have (in nm)"""
+    upperbound: thickest value a layer can have (in nm)
 
-    layers = np.random.randint(lowerbound, upperbound, size=num_layers).astype(float) * 10 ** -9
+    Returns numpy array of floats with shape (num_layers,)."""
+
+    layers = np.random.randint(lowerbound, upperbound, size=num_layers).astype(float)
+    layers = layers * (10 ** -9)
 
     return layers
+
+
+def print_intermediate_stats(Last_time: float, best_FOM_ever: float, core_num: int, round_num,
+                             start_time: float) -> float:
+    """ Prints the best FOM every 5 seconds.
+
+    :param Last_time: The last time this message was printed.
+    :param best_FOM_ever: The best FOM thusfar.
+    :param core_num: The core number.
+    :param round_num: The round number.
+    :param start_time: The start time.
+    :return: The most recent time this print statement was made.
+    """
+    now = time()
+    # Update every 5 seconds
+    if now - Last_time <= 5:
+        return Last_time
+    roundTo = 2
+    if best_FOM_ever > 10:
+        roundTo = 0
+
+    print(
+        f'---- Core #{core_num} -- best FOM: {round(best_FOM_ever, roundTo)} -- Iteration #{round_num} -- timestamp: {round(now - start_time, 2)} ----')
+
+    return now
+
+
+def backup_after_time(last_save: float, best_device_ever, best_FOM_ever, variables):
+    now = time()
+    if now - last_save <= 600:  # Save best every 10 minutes
+        return last_save
+    print(f'---- Time since last save: {round(now - last_save, 2)} ----')
+    save_device(best_device_ever, best_FOM_ever, variables)
+    return now
+
+
+def stage1(points: list[ndarray[float]], optimize_layers_total: ndarray[any, dtype[signedinteger]], variables: ndarray,
+           core_num: int):
+    # Unapacking required elements from 'variables'
+    N_layers = int(variables['num_layers'])
+    points_per_core = int(variables['points_per_core'])
+    default_start = int(variables['default_start'])
+    optimize_layers_increase = int(variables['optimize_layers_increase'])
+    stage_2_threshold = float(variables['stage_2_threshold'])
+    min_layer_thickness = int(variables['min_layer_thickness'])
+    max_layer_thickness = int(variables['max_layer_thickness'])
+
+    FOMs: list[float] = [0.0] * points_per_core  # Figure of merit for each device
+
+    start_time = time()
+    last_save = start_time
+    last_time = start_time
+    round_num = 0
+    break_loop = False
+    best_FOM_ever = 0  # initializing variable best_FOM_ever
+    best_device_ever = np.empty(N_layers)
+    while break_loop is False:  # Run forever
+        round_num += 1  # Keep count of round number
+        last_time = print_intermediate_stats(last_time, best_FOM_ever, core_num, round_num, start_time)
+        last_save = backup_after_time(last_save, best_device_ever, best_FOM_ever, variables)
+
+        for j in range(points_per_core):  # Iterate through the devices for each core
+            current_device = deepcopy(points[j])
+            max_FOM_this_device = get_FOM(current_device, variables)
+
+            for i in range(optimize_layers_total[j]):  # Iterate through the selected layers of the device
+                gradient = derivativeR(current_device, i, variables)  # getting derivative of the i-th dimension
+                current_device, max_FOM_this_device = optimize_single_layer(current_device, max_FOM_this_device,
+                                                                            gradient, variables, i)
+
+            if max_FOM_this_device > best_FOM_ever:
+                best_FOM_ever = max_FOM_this_device
+                best_device_ever = deepcopy(current_device)
+
+            FOMs[j] = max_FOM_this_device
+            if device_has_changed(points[j], current_device):
+                points[j] = current_device
+                # Go to the next device.
+                continue
+
+            # We have run out of optimization using just this layer-optimization scheme
+            if have_more_layers_to_optimize(optimize_layers_total[j], N_layers):
+                optimize_layers_total[j] = optimize_layers_total[j] + optimize_layers_increase
+                # Go back to the next device.
+                continue
+
+            # We have run the optimization on ALL the layers! Do something new:
+            if max_FOM_this_device < stage_2_threshold:
+                # This point is stuck in a local max. Kill it and have a new one take its spot
+                # print('NEW POINT CREATED:')
+                points[j] = create_thickness_list(N_layers, min_layer_thickness, max_layer_thickness)
+                FOMs[j] = 0
+                optimize_layers_total[j] = default_start
+                continue
+
+            print('------------------')
+            print('Core #' + str(core_num) + ' initiating stage 2')
+            stage2_device: ndarray[float] or None
+            stage2_FOM: float or None
+            break_loop, stage2_device, stage2_FOM = stage2(current_device, variables)
+
+            if stage2_FOM is not None and stage2_FOM >= best_FOM_ever:
+                best_device_ever = deepcopy(stage2_device)
+                best_FOM_ever = stage2_FOM
+
+            if not break_loop:
+                # Once you're done stage 2, if you don't break the loop, then just kill this point and move on.
+                # print('NEW POINT CREATED:')
+                points[j] = create_thickness_list(N_layers, min_layer_thickness, max_layer_thickness)
+                FOMs[j] = 0
+                optimize_layers_total[j] = default_start
+
+    plot_final_device(best_device_ever, variables)
 
 
 def calculate_T_from_device(n_BG_in, n_BG_out, thickness_list, index_list, wavelength, theta, polarization):
@@ -174,7 +312,7 @@ def calculate_T_from_device(n_BG_in, n_BG_out, thickness_list, index_list, wavel
     return t, T
 
 
-def get_FOM(thickness_list, variables):
+def get_FOM(thickness_list: ndarray[float], variables: ndarray) -> float:
     """thickness_list: thickness of each layer
     index_list_wBG: index of each layer
     wavelength: wavelength at the device is designed to work
@@ -203,7 +341,7 @@ def get_FOM(thickness_list, variables):
     return 1 / RMSE
 
 
-def derivativeR(a, i, variables):
+def derivativeR(a: ndarray[float], i: int, variables: ndarray) -> float:
     """Returns derivative as function of R for one layer
     a: layers of device
     i: index of the dimension to be derived
@@ -212,7 +350,7 @@ def derivativeR(a, i, variables):
     theta: the range of angles of incidence
     target_R: The compression factor R that the code is trying to imitate"""
 
-    # Unapacking required elements from 'variables'
+    # Unpacking required elements from 'variables'
     derivative_step = float(variables['derivative_step'])
 
     # If you don't use deepcopy(), changing b1 and/or b2 will change the original list (a)
@@ -231,8 +369,6 @@ def derivativeR(a, i, variables):
 
 
 def save_device(thickness_list, FOM, variables):
-    import os
-
     # Unapacking required elements from 'variables'
     wavelength = float(variables['wavelength'])
     index_list_wBG = variables['index_list_wBG'][0]
@@ -258,14 +394,10 @@ def save_device(thickness_list, FOM, variables):
     print(f'Saved file: {filename}.npz')
 
 
-def createSwarm(swarm_size, num_layers, lowerbound, upperbound):
-    """Creates a list of size swarm_size of randomly generated 'thickness_list's"""
-    return [create_thickness_list(num_layers, lowerbound, upperbound) for _ in range(swarm_size)]
-
-
-def optimize_single_layer(current_device, max_FOM_this_device, gradient, variables, layer_index):
+def optimize_single_layer(current_device: ndarray[float], max_FOM_this_device: float, gradient: float,
+                          variables: ndarray, layer_index: int) -> tuple[ndarray[float], float]:
     """Iterates through one layer of the device, and steps towards the maximum FOM"""
-    # Unapacking required elements from 'variables'
+    # Unpacking required elements from 'variables'
     step = float(variables['step1'])
 
     best_device = deepcopy(current_device)
@@ -297,105 +429,21 @@ def optimize_single_layer(current_device, max_FOM_this_device, gradient, variabl
     return best_device, max_FOM_this_device
 
 
-def stage1(points, optimize_layers_total, variables, core_num):
-    # Unapacking required elements from 'variables'
-    N_layers = int(variables['num_layers'])
-    points_per_core = int(variables['points_per_core'])
-    default_start = int(variables['default_start'])
-    optimize_layers_increase = int(variables['optimize_layers_increase'])
-    stage_2_threshold = float(variables['stage_2_threshold'])
-    min_layer_thickness = int(variables['min_layer_thickness'])
-    max_layer_thickness = int(variables['max_layer_thickness'])
-
-    FOMs = [0] * points_per_core  # Figure of merit for each device
-
-    Start_time = time()
-    Last_save = Start_time
-    Last_time = Start_time
-    round_num = 0
-    break_loop = False
-    best_FOM_ever = 0  # initializing variable best_FOM_ever
-    while break_loop is False:  # Run forever
-        round_num = round_num + 1  # Keep count of round number
-
-        now = time()
-        if now - Last_time > 5:  # Update every 5 seconds
-            if best_FOM_ever > 10:
-                print(
-                    f'---- Core #{core_num} -- best FOM: {round(best_FOM_ever)} -- Iteration #{round_num} -- timestamp: {round(now - Start_time, 2)} ----')
-            else:
-                print(
-                    f'---- Core #{core_num} -- best FOM: {round(best_FOM_ever, 2)} -- Iteration #{round_num} -- timestamp: {round(now - Start_time, 2)} ----')
-            Last_time = now
-
-        if now - Last_save > 600:  # Save best every 10 minutes
-            print(f'---- Time since last save: {round(now - Last_save, 2)} ----')
-            save_device(best_device_ever, best_FOM_ever, variables)
-            Last_save = now
-
-        for j in range(points_per_core):  # Iterate through the devices for each core
-            current_device = deepcopy(points[j])
-            max_FOM_this_device = get_FOM(current_device, variables)
-
-            for i in range(optimize_layers_total[j]):  # Iterate through the selected layers of the device
-                gradient = derivativeR(current_device, i, variables)  # getting derivative of the i-th dimension
-                current_device, max_FOM_this_device = optimize_single_layer(current_device, max_FOM_this_device,
-                                                                            gradient, variables, i)
-
-            if max_FOM_this_device > best_FOM_ever:
-                best_FOM_ever = max_FOM_this_device
-                best_device_ever = deepcopy(current_device)
-
-            FOMs[j] = max_FOM_this_device
-            if device_has_changed(points[j], current_device):
-                points[j] = current_device
-
-            else:  # We have run out of optimization using just this layer-optimization scheme
-
-                if have_more_layers_to_optimize(optimize_layers_total[j], N_layers):
-                    optimize_layers_total[j] = optimize_layers_total[j] + optimize_layers_increase
-
-                else:  # We have run the optimization on ALL the layers! Do something new:
-                    if max_FOM_this_device < stage_2_threshold:
-                        # This point is stuck in a local max. Kill it an have a new one take its spot
-                        # print('NEW POINT CREATED:')
-                        points[j] = create_thickness_list(N_layers, min_layer_thickness, max_layer_thickness)
-                        FOMs[j] = 0
-                        optimize_layers_total[j] = default_start
-
-                    else:
-                        print('------------------')
-                        print('Core #' + str(core_num) + ' initiating stage 2')
-                        stage2_output = stage2(current_device, variables, round_num)
-                        break_loop, stage2_device, stage2_FOM = stage2_output
-
-                        if stage2_FOM >= best_FOM_ever:
-                            best_device_ever = deepcopy(stage2_device)
-                            best_FOM_ever = stage2_FOM
-
-                        if not break_loop:
-                            # Once you're done stage 2, if you don't break the loop, then just kill this point and move on.
-                            # print('NEW POINT CREATED:')
-                            points[j] = create_thickness_list(N_layers, min_layer_thickness, max_layer_thickness)
-                            FOMs[j] = 0
-                            optimize_layers_total[j] = default_start
-
-    plot_final_device(best_device_ever, variables)
-
-
-def stage2(current_device, variables, round_num):
-    # Unapacking required elements from 'variables'
+def stage2(current_device: ndarray[float], variables: ndarray) -> tuple[bool, ndarray[float] or None, float or None]:
+    # Unpacking required elements from 'variables'
     threshold = float(variables['saving_threshold'])
-    filename = str(variables['filename'])
-
-    filename = f'{filename}_round{round_num}'
 
     best_FOM_ever = get_FOM(current_device, variables)
     max_FOM_this_device = best_FOM_ever
     break_loop = False
+
     previous_device = deepcopy(current_device)
     print('Device sent to stage 2:', previous_device * 1e9)
     print('Starting RMSE:', best_FOM_ever)
+
+    stop_program = False
+    final_device = None
+    final_FOM = None
 
     while break_loop is False:  # Run forever
         for i, _ in enumerate(current_device):  # Iterate through the selected layers of the device
@@ -408,24 +456,21 @@ def stage2(current_device, variables, round_num):
 
         if device_has_changed(previous_device, current_device):
             previous_device = deepcopy(current_device)
-        else:
-            break_loop = True
-            if max_FOM_this_device > threshold:  # We're done!
-                save_device(previous_device, max_FOM_this_device, variables)
-                stop_program = True
-                final_device = previous_device
-                final_FOM = max_FOM_this_device
-            else:
-                stop_program = False
-                final_device = 0
-                final_FOM = 0
+            continue
+
+        break_loop = True
+        if max_FOM_this_device > threshold:  # We're done!
+            save_device(previous_device, max_FOM_this_device, variables)
+            stop_program = True
+            final_device = previous_device
+            final_FOM = max_FOM_this_device
 
     return stop_program, final_device, final_FOM
 
 
 def take_a_step(layer_thickness, gradient, step):
-    ## If the x gradient is positive, the maxima must be in the
-    ## positive x direction.
+    # If the x gradient is positive, the maxima must be in the
+    # positive x direction.
     if gradient > 0:
         new_layer_thickness = layer_thickness + step
     else:
@@ -434,8 +479,8 @@ def take_a_step(layer_thickness, gradient, step):
     return new_layer_thickness
 
 
-def device_has_changed(old_device, new_device):
-    return not all(old_device == new_device)
+def device_has_changed(old_device: ndarray[float], new_device: ndarray[float]) -> bool:
+    return not np.array_equal(old_device, new_device)
 
 
 def have_more_layers_to_optimize(number_of_layers_being_optimized, total_number_of_layers):
@@ -449,7 +494,6 @@ def plot_final_device(thickness_list, variables):
     index_list_wBG = variables['index_list_wBG'][0]
     angles = variables['theta'][0]
     polarization = str(variables['polarization'])
-    target_R = float(variables['target_R'])
 
     n_BG_in = index_list_wBG[0]
     n_BG_out = index_list_wBG[-1]
@@ -481,7 +525,6 @@ def plot_final_device(thickness_list, variables):
     print(f'{N_layers} layers')
     print(f'Device thickness d:   {t_total * 1e6:.2f} um')
     print(f'Eff. thickness d_eff: {d_eff * 1e6:.2f} um')
-    plusminus = u'\u00b1'
     print(f'Compression factor R: {compression_R:.2f}')
     print(f'Fit RMSE:             {RMSE: .2e}')
     print(f'Fit 1/RMSE:           {1 / RMSE: .2f}')
